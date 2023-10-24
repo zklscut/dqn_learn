@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 from collections import namedtuple, deque
 from itertools import count
 import simple
+import os
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -108,8 +110,8 @@ def select_action(state):
 
 episode_durations = []
 
-
-def plot_durations(show_result=False):
+reward_d = []
+def plot_durations(show_result=False, reward=0):
     plt.figure(1)
     durations_t = torch.tensor(episode_durations, dtype=torch.float)
     if show_result:
@@ -120,11 +122,19 @@ def plot_durations(show_result=False):
     plt.xlabel('Episode')
     plt.ylabel('Duration')
     plt.plot(durations_t.numpy())
+    reward_d.append(reward)
+    plt.plot(reward_d)
+    
     # Take 100 episode averages and plot them too
     if len(durations_t) >= 100:
         means = durations_t.unfold(0, 100, 1).mean(1).view(-1)
         means = torch.cat((torch.zeros(99), means))
         plt.plot(means.numpy())
+        
+    
+    # if len(durations_t) >= 10:
+    #     reward_d.append(reward)
+    #     plt.plot(reward_d)
 
     plt.pause(0.001)  # pause a bit so that plots are updated
     if is_ipython:
@@ -158,8 +168,11 @@ n_observations = len(state)
 
 policy_net = DQN(n_observations, n_actions).to(device)
 target_net = DQN(n_observations, n_actions).to(device)
-# policy_net.load_state_dict(torch.load(SAVE_PATH))
-# policy_net.eval()
+policy_net.load_state_dict(torch.load(SAVE_PATH))
+policy_net.eval()
+# if os.path.exists(SAVE_PATH):
+#     policy_net.load_state_dict(torch.load(SAVE_PATH))
+#     policy_net.eval()
 target_net.load_state_dict(policy_net.state_dict())
 
 optimizer = optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
@@ -188,30 +201,30 @@ def select_action(state):
 episode_durations = []
 
 
-def plot_durations(show_result=False):
-    plt.figure(1)
-    durations_t = torch.tensor(episode_durations, dtype=torch.float)
-    if show_result:
-        plt.title('Result')
-    else:
-        plt.clf()
-        plt.title('Training...')
-    plt.xlabel('Episode')
-    plt.ylabel('Duration')
-    plt.plot(durations_t.numpy())
-    # Take 100 episode averages and plot them too
-    if len(durations_t) >= 100:
-        means = durations_t.unfold(0, 100, 1).mean(1).view(-1)
-        means = torch.cat((torch.zeros(99), means))
-        plt.plot(means.numpy())
+# def plot_durations(show_result=False):
+#     plt.figure(1)
+#     durations_t = torch.tensor(episode_durations, dtype=torch.float)
+#     if show_result:
+#         plt.title('Result')
+#     else:
+#         plt.clf()
+#         plt.title('Training...')
+#     plt.xlabel('Episode')
+#     plt.ylabel('Duration')
+#     plt.plot(durations_t.numpy())
+#     # Take 100 episode averages and plot them too
+#     if len(durations_t) >= 100:
+#         means = durations_t.unfold(0, 100, 1).mean(1).view(-1)
+#         means = torch.cat((torch.zeros(99), means))
+#         plt.plot(means.numpy())
 
-    plt.pause(0.001)  # pause a bit so that plots are updated
-    if is_ipython:
-        if not show_result:
-            display.display(plt.gcf())
-            display.clear_output(wait=True)
-        else:
-            display.display(plt.gcf())
+#     plt.pause(0.001)  # pause a bit so that plots are updated
+#     if is_ipython:
+#         if not show_result:
+#             display.display(plt.gcf())
+#             display.clear_output(wait=True)
+#         else:
+#             display.display(plt.gcf())
 
 def optimize_model():
     if len(memory) < BATCH_SIZE:
@@ -260,7 +273,7 @@ def optimize_model():
     optimizer.step()
 
 if torch.cuda.is_available():
-    num_episodes = 500
+    num_episodes = 1800
 else:
     num_episodes = 50
 
@@ -271,6 +284,7 @@ for i_episode in range(num_episodes):
     for t in count():
         action = select_action(state)
         observation, reward, terminated, truncated, _ = env.step(action.item())
+        org_reward = reward
         reward = torch.tensor([reward], device=device)
         done = terminated or truncated
 
@@ -298,10 +312,10 @@ for i_episode in range(num_episodes):
 
         if done:
             episode_durations.append(t + 1)
-            plot_durations()
+            plot_durations(False, org_reward)
             break
 
-#torch.save(policy_net.state_dict(), SAVE_PATH)
+torch.save(policy_net.state_dict(), SAVE_PATH)
 print('Complete')
 plot_durations(show_result=True)
 plt.ioff()
