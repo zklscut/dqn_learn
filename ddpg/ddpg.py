@@ -5,10 +5,9 @@ import torch
 from torch import nn, optim
 from torch.nn import functional as F
 import lua_env
+import os
 
 from collections import namedtuple, deque
-Transition = namedtuple('Transition',
-                        ('state', 'action', 'reward', 'next_state', 'done'))
 
 
 class Config:
@@ -17,9 +16,9 @@ class Config:
         self.env_name = "sphere"
         self.algo_name = 'DDPG'
         self.render_mode = 'rgb_array'
-        self.train_eps = 500
+        self.train_eps = 50
         self.test_eps = 10
-        self.max_steps = 200
+        self.max_steps = 50
         self.batch_size = 128
         self.memory_capacity = 10000
         self.lr_a = 2e-3
@@ -33,6 +32,8 @@ class Config:
         self.n_states = None
         self.n_actions = None
         self.action_bound = None
+        self.actor_path = "actor"
+        self.critic_path = "critic"
         self.device = torch.device('cuda') \
             if torch.cuda.is_available() else torch.device('cpu')
 
@@ -42,20 +43,11 @@ class Config:
             print(k, '=', v)
         print('-' * 60)
 
+def make_env(cfg):
+    #return gym.make(cfg.env_name, render_mode = cfg.render_mode).unwrapped
+    return lua_env.CustomEnv(cfg.env_name)
 
 class ReplayBuffer:
-    # def __init__(self, capacity):
-    #     self.memory = deque([], maxlen=capacity)
-
-    # def push(self, *args):
-    #     """Save a transition"""
-    #     self.memory.append(Transition(*args))
-
-    # def sample(self, batch_size):
-    #     return random.sample(self.memory, batch_size)
-
-    # def __len__(self):
-    #     return len(self.memory)
     def __init__(self, cfg):
         self.buffer = np.empty(cfg.memory_capacity, dtype=object)
         self.size = 0
@@ -77,7 +69,6 @@ class ReplayBuffer:
     def sample(self):
         batch_size = min(self.batch_size, self.size)
         indices = np.random.choice(self.size, batch_size, replace=False)
-        #return random.sample(self.buffer[indices], batch_size)
         batch_size = min(self.batch_size, self.size)
         indices = np.random.choice(self.size, batch_size, replace=False)
         samples = map(lambda x: torch.tensor(np.array(x), dtype=torch.float32,
@@ -121,10 +112,18 @@ class DDPG:
     def __init__(self, cfg):
         self.cfg = cfg
         self.memory = ReplayBuffer(cfg)
+
         self.actor = Actor(cfg).to(cfg.device)
         self.actor_target = Actor(cfg).to(cfg.device)
+        if cfg.actor_path and os.path.exists(cfg.actor_path):
+            self.actor.load_state_dict(torch.load(cfg.actor_path))
+            self.actor_target.load_state_dict(self.actor.state_dict())
+            
         self.critic = Critic(cfg).to(cfg.device)
         self.critic_target = Critic(cfg).to(cfg.device)
+        if cfg.critic_path and os.path.exists(cfg.critic_path):
+            self.critic.load_state_dict(torch.load(cfg.critic_path))
+
         self.actor_optim = optim.Adam(self.actor.parameters(), lr=cfg.lr_a)
         self.critic_optim = optim.Adam(self.critic.parameters(), lr=cfg.lr_c)
         self.critic_target.load_state_dict(self.critic.state_dict())
@@ -137,12 +136,12 @@ class DDPG:
         return action
 
 
-    def update(self):
+    def update(self, cfg):
         if len(self.memory) < self.cfg.batch_size:
             return 0, 0
         states, actions, rewards, next_states, dones = self.memory.sample()
         
-        actions, rewards, dones = actions.view(-1, 3), rewards.view(-1, 1), dones.view(-1, 1)
+        actions, rewards, dones = actions.view(-1, cfg.n_actions), rewards.view(-1, 1), dones.view(-1, 1)
         next_q_value = self.critic_target(next_states, self.actor_target(next_states))
         target_q_value = rewards + (1 - dones) * self.cfg.gamma * next_q_value
 
@@ -167,11 +166,16 @@ class DDPG:
             target_param.data.copy_(self.cfg.tau * param.data +
                                     (1. - self.cfg.tau) * target_param.data)
 
+    def save(self):
+        if cfg.actor_path:
+            torch.save(self.actor.state_dict(), cfg.actor_path)
+
+        if cfg.critic_path:
+            torch.save(self.critic.state_dict(), cfg.critic_path)        
+
 
 def env_agent_config(cfg):
-    env = lua_env.CustomEnv(cfg.env_name)
-    #env = simple.MySim() 
-    #env = gym.make(cfg.env_name, render_mode = cfg.render_mode).unwrapped
+    env = make_env(cfg)
     print(f'观测空间 = {env.observation_space}')
     print(f'动作空间 = {env.action_space}')
     cfg.n_states = env.observation_space.shape[0]
@@ -196,7 +200,7 @@ def train(env, agent, cfg):
             done = terminated
             agent.memory.push([state, action, reward, next_state, done])
             state = next_state
-            c_loss, a_loss = agent.update()
+            c_loss, a_loss = agent.update(cfg)
             critic_loss += c_loss
             actor_loss += a_loss
             ep_reward += reward
@@ -214,7 +218,7 @@ def train(env, agent, cfg):
 def test(agent, cfg):
     print('开始测试!')
     rewards, steps = [], []
-    env = gym.make(cfg.env_name, render_mode='human')
+    env = make_env(cfg)
     for i in range(cfg.test_eps):
         ep_reward, ep_step = 0.0, 0
         state, _ = env.reset(seed=cfg.seed)
@@ -238,4 +242,5 @@ if __name__ == '__main__':
     cfg = Config()
     env, agent = env_agent_config(cfg)
     train_rewards, train_steps = train(env, agent, cfg)
+    agent.save()
     test_rewards, test_steps = test(agent, cfg)
