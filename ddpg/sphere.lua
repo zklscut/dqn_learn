@@ -36,6 +36,7 @@ local function get_reward()
 
     if self.map[x][z] == y then
         self.reward[index] = true
+        print("reach", x, z, y)
         return 1.1
     end
 
@@ -66,7 +67,7 @@ function M.step(act1, act2, act3)
     if is_done then
         print("total reward ===", self.total_reward)
     end
-    return self.state, reward, is_done
+    return self.state, reward, is_done and 1 or 0
 end
 
 

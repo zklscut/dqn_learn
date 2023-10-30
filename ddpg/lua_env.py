@@ -32,14 +32,16 @@ class CustomEnv(gym.Env):
     #gymnasium.Env.step(self, action: ActType) → tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]
     def step(self, action):
         state, reward, is_done = self.call_lua("step", float(action[0]), float(action[1]), float(action[2]))
-        # print("sate: ", state[1], state[2], reward)
-        return self.lua_list_to_array(state), reward, is_done, {}, {}
+        done = False
+        if is_done == 1:
+            done = True
+        return self.lua_list_to_np(state), reward, done, {}, {}
     
     def reset(self, seed):
         # 初始化 state 的状态，在 step 中通过 x, z = self.state获取
         # 所以这里的参数个数与 step 需要的一致
         state = self.call_lua("reset")
-        return self.lua_list_to_array(state), {}
+        return self.lua_list_to_np(state), {}
     
     def render(self, mode='human'):
         pass

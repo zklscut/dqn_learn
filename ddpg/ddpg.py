@@ -44,45 +44,47 @@ class Config:
 
 
 class ReplayBuffer:
-    def __init__(self, capacity):
-        self.memory = deque([], maxlen=capacity)
+    # def __init__(self, capacity):
+    #     self.memory = deque([], maxlen=capacity)
 
-    def push(self, *args):
-        """Save a transition"""
-        self.memory.append(Transition(*args))
+    # def push(self, *args):
+    #     """Save a transition"""
+    #     self.memory.append(Transition(*args))
 
-    def sample(self, batch_size):
-        return random.sample(self.memory, batch_size)
+    # def sample(self, batch_size):
+    #     return random.sample(self.memory, batch_size)
 
+    # def __len__(self):
+    #     return len(self.memory)
+    def __init__(self, cfg):
+        self.buffer = np.empty(cfg.memory_capacity, dtype=object)
+        self.size = 0
+        self.pointer = 0
+        self.capacity = cfg.memory_capacity
+        self.batch_size = cfg.batch_size
+        self.device = cfg.device
+
+    def push(self, transitions):
+        self.buffer[self.pointer] = transitions
+        self.size = min(self.size + 1, self.capacity)
+        self.pointer = (self.pointer + 1) % self.capacity
+
+    def clear(self):
+        self.buffer = np.empty(self.capacity, dtype=object)
+        self.size = 0
+        self.pointer = 0
+
+    def sample(self):
+        batch_size = min(self.batch_size, self.size)
+        indices = np.random.choice(self.size, batch_size, replace=False)
+        #return random.sample(self.buffer[indices], batch_size)
+        batch_size = min(self.batch_size, self.size)
+        indices = np.random.choice(self.size, batch_size, replace=False)
+        samples = map(lambda x: torch.tensor(np.array(x), dtype=torch.float32,
+                                             device=self.device), zip(*self.buffer[indices]))
+        return samples
     def __len__(self):
-        return len(self.memory)
-    # def __init__(self, cfg):
-    #     self.buffer = np.empty(cfg.memory_capacity, dtype=object)
-    #     self.size = 0
-    #     self.pointer = 0
-    #     self.capacity = cfg.memory_capacity
-    #     self.batch_size = cfg.batch_size
-    #     self.device = cfg.device
-
-    # def push(self, transitions):
-    #     self.buffer[self.pointer] = transitions
-    #     self.size = min(self.size + 1, self.capacity)
-    #     self.pointer = (self.pointer + 1) % self.capacity
-
-    # def clear(self):
-    #     self.buffer = np.empty(self.capacity, dtype=object)
-    #     self.size = 0
-    #     self.pointer = 0
-
-    # def sample(self):
-    #     batch_size = min(self.batch_size, self.size)
-    #     indices = np.random.choice(self.size, batch_size, replace=False)
-    #     return random.sample(self.buffer[indices], batch_size)
-    #     # batch_size = min(self.batch_size, self.size)
-    #     # indices = np.random.choice(self.size, batch_size, replace=False)
-    #     # samples = map(lambda x: torch.tensor(np.float32(np.array(x)), dtype=torch.float32,
-    #     #                                      device=self.device), zip(*self.buffer[indices]))
-    #     # return samples
+        return self.size
 
 
 class Actor(nn.Module):
@@ -107,7 +109,7 @@ class Critic(nn.Module):
         self.fc3 = nn.Linear(cfg.critic_hidden_dim, 1)
 
 
-    def forward(self, x, a):
+    def forward(self, x, a):        
         cat = torch.cat([x, a], dim=1)
         x = F.relu(self.fc1(cat))
         x = F.relu(self.fc2(x))
@@ -118,7 +120,7 @@ class Critic(nn.Module):
 class DDPG:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.memory = ReplayBuffer(10000)
+        self.memory = ReplayBuffer(cfg)
         self.actor = Actor(cfg).to(cfg.device)
         self.actor_target = Actor(cfg).to(cfg.device)
         self.critic = Critic(cfg).to(cfg.device)
@@ -138,14 +140,9 @@ class DDPG:
     def update(self):
         if len(self.memory) < self.cfg.batch_size:
             return 0, 0
-        states, actions, rewards, next_states, dones = zip(*self.memory.sample(self.cfg.batch_size))
-        print("states==",  states)
-        print("actions==",  actions)
-        print("rewards==",  rewards)
-        print("next_states==",  next_states)
-        print("dones==",  dones)
+        states, actions, rewards, next_states, dones = self.memory.sample()
         
-        actions, rewards, dones = actions.view(-1, 1), rewards.view(-1, 1), dones.view(-1, 1)
+        actions, rewards, dones = actions.view(-1, 3), rewards.view(-1, 1), dones.view(-1, 1)
         next_q_value = self.critic_target(next_states, self.actor_target(next_states))
         target_q_value = rewards + (1 - dones) * self.cfg.gamma * next_q_value
 
@@ -160,7 +157,6 @@ class DDPG:
         self.actor_optim.step()
 
         self.update_params()
-
         return actor_loss.item(), critic_loss.item()
 
     def update_params(self):
@@ -196,10 +192,9 @@ def train(env, agent, cfg):
         for _ in range(cfg.max_steps):
             ep_step += 1
             action = agent.choose_action(state)
-            print("action", action)
             next_state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
-            agent.memory.push(state, action, reward, next_state, done)
+            done = terminated
+            agent.memory.push([state, action, reward, next_state, done])
             state = next_state
             c_loss, a_loss = agent.update()
             critic_loss += c_loss
